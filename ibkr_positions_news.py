@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-IBKR Daily Positions News Script
+IBKR Daily Positions Script
 Fetches open positions from Interactive Brokers using Flex Web Service
-Posts to Discord with latest news for each ticker
+Posts to Discord
 """
 
 import os
@@ -10,37 +10,25 @@ import sys
 import requests
 import csv
 import io
-import json
 from datetime import datetime
 from dotenv import load_dotenv
 
-# Load environment variables
 load_dotenv()
 
-# Configuration
 IBKR_FLEX_TOKEN = os.getenv('IBKR_FLEX_TOKEN', '')
 IBKR_QUERY_ID = os.getenv('IBKR_QUERY_ID', '')
 DISCORD_WEBHOOK = os.getenv('DISCORD_WEBHOOK', '')
 
-# Flex Web Service endpoints
 FLEX_BASE_URL = "https://ndcdyn.interactivebrokers.com/AccountManagement/FlexWebService"
 
 
 def get_positions():
-    """Fetch open positions from IBKR using Flex Web Service"""
-    
     request_url = f"{FLEX_BASE_URL}/SendRequest"
-    params = {
-        't': IBKR_FLEX_TOKEN,
-        'q': IBKR_QUERY_ID,
-        'v': 3
-    }
-    
+    params = {'t': IBKR_FLEX_TOKEN, 'q': IBKR_QUERY_ID, 'v': 3}
     response = requests.get(request_url, params=params, timeout=30)
     
     if response.status_code != 200:
-        print(f"Error sending request: {response.status_code}")
-        return None, None
+        return None
     
     response_text = response.text
     
@@ -50,21 +38,15 @@ def get_positions():
         ref_code_elem = root.find('.//ReferenceCode')
         
         if ref_code_elem is None or not ref_code_elem.text:
-            return None, None
+            return None
         
         reference_code = ref_code_elem.text
-        
         statement_url = f"{FLEX_BASE_URL}/GetStatement"
-        params = {
-            't': IBKR_FLEX_TOKEN,
-            'q': reference_code,
-            'v': 3
-        }
-        
+        params = {'t': IBKR_FLEX_TOKEN, 'q': reference_code, 'v': 3}
         response = requests.get(statement_url, params=params, timeout=30)
         
         if response.status_code != 200:
-            return None, None
+            return None
         
         return parse_csv(response.text)
     
@@ -72,10 +54,8 @@ def get_positions():
 
 
 def parse_csv(csv_string):
-    """Parse positions from Flex Web Service CSV response"""
     try:
         reader = csv.DictReader(io.StringIO(csv_string))
-        
         positions = []
         
         for row in reader:
@@ -103,66 +83,29 @@ def parse_csv(csv_string):
             except:
                 pnl = 0
             
-            position = {
+            positions.append({
                 'symbol': symbol,
                 'description': row.get('Description', ''),
                 'quantity': quantity,
                 'position_value': position_value,
                 'pnl': pnl,
-            }
-            
-            positions.append(position)
+            })
         
-        return positions, {}
+        return positions
         
     except Exception as e:
         print(f"Error parsing CSV: {e}")
-        return [], {}
-
-
-def get_news_for_ticker(ticker):
-    """Search for latest news for a ticker using web search"""
-    try:
-        # Use a simple web search - in production, use a proper news API
-        search_url = f"https://ddg-api.vercel.app/search?q={ticker}+stock+news"
-        
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-        }
-        
-        resp = requests.get(search_url, headers=headers, timeout=10)
-        
-        if resp.status_code == 200:
-            data = resp.json()
-            results = data.get('results', [])
-            
-            if results:
-                # Get top 1-2 news items
-                news_items = []
-                for item in results[:2]:
-                    title = item.get('title', '')[:80]
-                    href = item.get('href', '')
-                    if title and href:
-                        news_items.append(f"• {title}\n  {href}")
-                return news_items
-        
-        return []
-        
-    except Exception as e:
-        print(f"Error getting news for {ticker}: {e}")
         return []
 
 
-def format_message(positions, news_dict):
-    """Format the positions as a message"""
-    message = "📊 **IBKR Daily Positions + News Update**\n"
+def format_message(positions):
+    message = "📊 **IBKR Daily Positions Update**\n"
     message += f"_{datetime.now().strftime('%Y-%m-%d %H:%M %Z')}_\n\n"
     
     if not positions:
         message += "No open positions found."
         return message
     
-    # Calculate totals
     total_value = sum(p.get('position_value', 0) for p in positions)
     total_pnl = sum(p.get('pnl', 0) for p in positions)
     
@@ -172,13 +115,9 @@ def format_message(positions, news_dict):
     
     message += "**Open Positions:**\n"
     
-    # Sort by position value descending
     positions.sort(key=lambda x: x.get('position_value', 0), reverse=True)
     
-    # Limit to top positions to keep message short
-    top_positions = positions[:10]
-    
-    for pos in top_positions:
+    for pos in positions:
         symbol = pos.get('symbol', 'Unknown')
         description = pos.get('description', '')
         quantity = pos.get('quantity', 0)
@@ -192,22 +131,17 @@ def format_message(positions, news_dict):
             message += f"   {description}\n"
         message += f"   Shares: {quantity} | Value: ${position_value:,.2f} | P&L: ${pnl:,.2f}\n"
         
-        # Add news if available
-        if symbol in news_dict and news_dict[symbol]:
-            message += f"   📰 **Latest News:**\n"
-            for news in news_dict[symbol]:
-                message += f"   {news}\n"
+        # Add ticker mention for research trigger
+        message += f"   🔍 Research: @{symbol}\n"
     
-    if len(positions) > 10:
-        message += f"\n_... and {len(positions) - 10} more positions_"
+    message += "\n\n_Replying with @ticker will research that stock_"
     
     return message
 
 
 def send_discord(message):
-    """Send message to Discord webhook"""
     if not DISCORD_WEBHOOK:
-        print("No Discord webhook configured - skipping")
+        print("No Discord webhook configured")
         return
     
     payload = {"content": message}
@@ -215,56 +149,30 @@ def send_discord(message):
     if resp.status_code == 204:
         print("Sent to Discord successfully")
     else:
-        print(f"Failed to send to Discord: {resp.status_code}")
+        print(f"Failed: {resp.status_code}")
 
 
 def main():
-    print("=" * 50)
-    print("IBKR Daily Positions + News")
-    print("=" * 50)
+    print("IBKR Daily Positions")
+    print("=" * 40)
     
     if not IBKR_FLEX_TOKEN or not IBKR_QUERY_ID:
-        print("ERROR: Missing credentials in .env")
+        print("ERROR: Missing credentials")
         sys.exit(1)
     
-    print(f"Fetching positions...")
+    print("Fetching positions...")
+    positions = get_positions()
     
-    try:
-        positions, _ = get_positions()
-        if positions is None:
-            print("Failed to get positions")
-            sys.exit(1)
-        print(f"Found {len(positions)} positions")
-    except Exception as e:
-        print(f"Error: {e}")
-        positions = []
-    
-    if not positions:
-        send_discord("📊 **IBKR Daily Update**\nNo open positions found.")
+    if positions is None:
+        print("Failed to get positions")
+        send_discord("⚠️ Failed to fetch IBKR positions")
         return
     
-    # Get news for each ticker
-    print("Fetching news for tickers...")
-    news_dict = {}
-    tickers = [p['symbol'] for p in positions[:10]]  # Top 10 by value
+    print(f"Found {len(positions)} positions")
     
-    for ticker in tickers:
-        print(f"  Getting news for {ticker}...")
-        news = get_news_for_ticker(ticker)
-        news_dict[ticker] = news
-    
-    # Format and send message
-    message = format_message(positions, news_dict)
-    
-    print("\n" + "=" * 50)
-    print("MESSAGE OUTPUT:")
-    print("=" * 50)
-    print(message[:500] + "..." if len(message) > 500 else message)
-    print("=" * 50)
-    
+    message = format_message(positions)
     send_discord(message)
-    
-    print("\nDone!")
+    print("Done!")
 
 
 if __name__ == "__main__":
