@@ -11,7 +11,8 @@ Usage:
 import os
 import sys
 import requests
-import xml.etree.ElementTree as ET
+import csv
+import io
 from datetime import datetime
 from dotenv import load_dotenv
 
@@ -44,83 +45,92 @@ def get_positions():
         print(f"Error sending request: {response.status_code} - {response.text}")
         return None, None
     
-    # Parse XML response
-    root = ET.fromstring(response.text)
+    # Parse response - could be XML or query response
+    response_text = response.text
     
-    # Get reference code
-    ref_code_elem = root.find('.//{http://www.iborkers.com/TWS}referenceCode')
-    if ref_code_elem is None:
-        # Try without namespace
+    # Check if it's a query response with reference code
+    if '<referenceCode>' in response_text:
+        import xml.etree.ElementTree as ET
+        root = ET.fromstring(response_text)
         ref_code_elem = root.find('.//referenceCode')
+        
+        if ref_code_elem is None or not ref_code_elem.text:
+            print(f"Could not find reference code in response")
+            return None, None
+        
+        reference_code = ref_code_elem.text
+        
+        # Step 2: Fetch the report using reference code
+        statement_url = f"{FLEX_BASE_URL}/GetStatement"
+        params = {
+            't': IBKR_FLEX_TOKEN,
+            'q': reference_code,
+            'v': 3
+        }
+        
+        response = requests.get(statement_url, params=params, timeout=30)
+        
+        if response.status_code != 200:
+            print(f"Error getting statement: {response.status_code}")
+            return None, None
+        
+        return parse_csv(response.text)
     
-    if ref_code_elem is None or not ref_code_elem.text:
-        print(f"Could not find reference code in response: {response.text}")
-        return None, None
-    
-    reference_code = ref_code_elem.text
-    
-    # Step 2: Fetch the report using reference code
-    statement_url = f"{FLEX_BASE_URL}/GetStatement"
-    params = {
-        't': IBKR_FLEX_TOKEN,
-        'q': reference_code,
-        'v': 3
-    }
-    
-    response = requests.get(statement_url, params=params, timeout=30)
-    
-    if response.status_code != 200:
-        print(f"Error getting statement: {response.status_code}")
-        return None, None
-    
-    # Parse positions from response
-    return parse_positions(response.text)
+    # If it's already CSV data, parse it directly
+    return parse_csv(response_text)
 
 
-def parse_positions(xml_string):
-    """Parse positions from Flex Web Service XML response"""
+def parse_csv(csv_string):
+    """Parse positions from Flex Web Service CSV response"""
     try:
-        root = ET.fromstring(xml_string)
+        # Read CSV data
+        reader = csv.DictReader(io.StringIO(csv_string))
         
         positions = []
-        account_value = {}
         
-        # Find AccountInfo section for NetLiquidation
-        account_info = root.find('.//AccountInformation')
-        if account_info is not None:
-            account_value['NetLiquidation'] = account_info.get('netLiquidation', '0')
-            account_value['CashBalance'] = account_info.get('cashBalance', '0')
-            account_value['DailyPnL'] = account_info.get('dailyPnL', '0')
-        
-        # Find all position entries
-        for pos in root.findall('.//Position'):
-            symbol = pos.get('symbol', '')
+        for row in reader:
+            # Skip rows that are headers or empty
+            if row.get('Symbol') in [None, ''] or row.get('Symbol') == 'Symbol':
+                continue
+            
+            symbol = row.get('Symbol', '')
             if not symbol:
                 continue
-                
+            
+            # Parse numeric values
+            try:
+                quantity = float(row.get('Quantity', 0))
+                # Skip closed positions
+                if quantity == 0:
+                    continue
+            except:
+                quantity = 0
+            
+            try:
+                position_value = float(row.get('PositionValue', 0))
+            except:
+                position_value = 0
+            
+            try:
+                pnl = float(row.get('FifoPnlUnrealized', 0))
+            except:
+                pnl = 0
+            
             position = {
                 'symbol': symbol,
-                'position': pos.get('quantity', '0'),
-                'marketValue': pos.get('marketValue', '0'),
-                'costBasis': pos.get('costBasis', '0'),
-                'openPnL': pos.get('openPnL', '0'),
+                'description': row.get('Description', ''),
+                'quantity': quantity,
+                'position_value': position_value,
+                'pnl': pnl,
             }
-            
-            # Calculate P&L
-            try:
-                mkt = float(position['marketValue']) if position['marketValue'] else 0
-                cost = float(position['costBasis']) if position['costBasis'] else 0
-                position['pnl'] = mkt - cost
-            except:
-                position['pnl'] = 0
             
             positions.append(position)
         
-        return positions, account_value
+        return positions, {}
         
-    except ET.ParseError as e:
-        print(f"Error parsing XML: {e}")
-        print(f"Response was: {xml_string[:500]}")
+    except Exception as e:
+        print(f"Error parsing CSV: {e}")
+        print(f"Response was: {csv_string[:500]}")
         return [], {}
 
 
@@ -129,38 +139,38 @@ def format_message(positions, account_info):
     message = "📊 **IBKR Daily Positions Update**\n"
     message += f"_{datetime.now().strftime('%Y-%m-%d %H:%M %Z')}_\n\n"
     
-    # Account summary
-    if account_info:
-        net_liq = float(account_info.get('NetLiquidation', 0))
-        cash = float(account_info.get('CashBalance', 0))
-        daily_pnl = float(account_info.get('DailyPnL', 0))
-        
-        message += f"**Account Value:** ${net_liq:,.2f}\n"
-        message += f"**Cash:** ${cash:,.2f}\n"
-        emoji = "🟢" if daily_pnl >= 0 else "🔴"
-        message += f"{emoji} **Daily P&L:** ${daily_pnl:,.2f}\n\n"
-    
     if not positions:
         message += "No open positions found."
         return message
     
+    # Calculate totals
+    total_value = sum(p.get('position_value', 0) for p in positions)
+    total_pnl = sum(p.get('pnl', 0) for p in positions)
+    
+    message += f"**Total Position Value:** ${total_value:,.2f}\n"
+    emoji = "🟢" if total_pnl >= 0 else "🔴"
+    message += f"{emoji} **Total Unrealized P&L:** ${total_pnl:,.2f}\n\n"
+    
     message += "**Open Positions:**\n"
     
-    # Sort by market value descending
-    positions.sort(key=lambda x: float(x.get('marketValue', 0)), reverse=True)
+    # Sort by position value descending
+    positions.sort(key=lambda x: x.get('position_value', 0), reverse=True)
     
     for pos in positions:
         symbol = pos.get('symbol', 'Unknown')
-        position = pos.get('position', 0)
-        market_value = pos.get('marketValue', 0)
-        pnl_val = pos.get('pnl', 0)
+        description = pos.get('description', '')
+        quantity = pos.get('quantity', 0)
+        position_value = pos.get('position_value', 0)
+        pnl = pos.get('pnl', 0)
         
-        emoji = "🟢" if pnl_val >= 0 else "🔴"
+        emoji = "🟢" if pnl >= 0 else "🔴"
         
         message += f"\n{emoji} **{symbol}**\n"
-        message += f"   Shares: {position}\n"
-        message += f"   Value: ${float(market_value):,.2f}\n"
-        message += f"   P&L: ${pnl_val:,.2f}\n"
+        if description:
+            message += f"   {description}\n"
+        message += f"   Shares: {quantity}\n"
+        message += f"   Value: ${position_value:,.2f}\n"
+        message += f"   P&L: ${pnl:,.2f}\n"
     
     return message
 
