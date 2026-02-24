@@ -1,33 +1,47 @@
 # IBKR News Bot
 
-Daily automation script that fetches your Interactive Brokers positions and posts updates to Discord.
+Daily automation script that fetches your Interactive Brokers positions and posts updates to Discord using Flex Web Service.
 
 ## Features
 
 - ✅ Fetches open positions from IBKR
 - ✅ Shows P&L for each position
 - ✅ Posts daily updates to Discord
-- ✅ Uses API key (not username/password)
+- ✅ Uses Flex Web Service (no local software needed!)
+- ✅ Secure token-based authentication
 
 ## Setup
 
-### 1. Get IBKR API Key
+### 1. Get IBKR Flex Web Service Token
 
-1. Log into [Interactive Brokers](https://www.interactivebrokers.com)
-2. Go to Account Settings → API Settings
-3. Create API Key
-4. Copy the API Key and Account ID
+1. Log into [IBKR Account Management](https://interactivebrokers.com)
+2. Go to **Reports** → **Flex Queries**
+3. Click **Flex Web Service** (or "Flex Web Configuration")
+4. Toggle **Enable Flex Web Service** to ON
+5. **Copy the Token** shown (starts with `eyJ...`)
 
-### 2. Get Discord Webhook
+### 2. Get Flex Query ID
 
-1. Discord Server → Server Settings → Integrations
-2. Create Webhook
-3. Choose #alerts channel
+1. Still in **Reports** → **Flex Queries**
+2. Click **Create a Flex Query**
+3. Choose **Positions** or **Account Information**
+4. Name it (e.g., "Daily Positions")
+5. Save and **copy the Query ID** (a number like `12345`)
+
+### 3. Get Discord Webhook
+
+1. Discord Server → **Server Settings** → **Integrations**
+2. Create **Webhook**
+3. Choose **#alerts** channel
 4. Copy the Webhook URL
 
-### 3. Configure
+### 4. Configure
 
 ```bash
+# Clone the repo
+git clone https://github.com/MyOpenClaww/ibkr-news-bot.git
+cd ibkr-news-bot
+
 # Copy the example config
 cp .env.example .env
 
@@ -35,7 +49,12 @@ cp .env.example .env
 nano .env
 ```
 
-### 4. Install & Test
+Fill in:
+- `IBKR_FLEX_TOKEN` = your Flex token
+- `IBKR_QUERY_ID` = your Query ID
+- `DISCORD_WEBHOOK` = your Discord webhook URL
+
+### 5. Test
 
 ```bash
 # Install dependencies
@@ -45,38 +64,34 @@ pip install -r requirements.txt
 python ibkr_positions_news.py
 ```
 
-## Usage
-
-```bash
-python ibkr_positions_news.py
-```
-
 ## Automation
 
-### Option A: Cron (Local)
+### Option A: Cron (Local - Recommended for now)
 
 ```bash
 # Add to crontab
 crontab -e
 
-# Add this line for daily 8am:
-0 8 * * * /path/to/python /path/to/ibkr_positions_news.py >> /path/to/log.txt 2>&1
+# Add this line for daily 8am Melbourne time:
+0 8 * * * /usr/bin/python3 /path/to/ibkr_positions_news.py >> /path/to/log.txt 2>&1
 ```
 
-### Option B: Cloudflare Worker (Recommended)
+### Option B: GitHub Actions (Cloud)
 
-Deploy to Cloudflare Workers for serverless execution.
+Can be set up to run automatically without your machine.
 
 ## Files
 
 ```
 ibkr-news-bot/
 ├── ibkr_positions_news.py   # Main script
-├── requirements.txt          # Python dependencies
-├── .env.example             # Config template
-└── README.md                # This file
+├── requirements.txt        # Python dependencies
+├── .env.example          # Config template
+├── .gitignore
+└── README.md
 ```
 
 ## Support
 
+- IBKR Flex Web Service: https://www.ibkrguides.com/complianceportal/complianceportal/flexweb.htm
 - IBKR API Docs: https://www.interactivebrokers.com/en/trading/ib-api.php
