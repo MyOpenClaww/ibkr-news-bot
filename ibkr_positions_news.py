@@ -18,6 +18,7 @@ load_dotenv()
 IBKR_FLEX_TOKEN = os.getenv('IBKR_FLEX_TOKEN', '')
 IBKR_QUERY_ID = os.getenv('IBKR_QUERY_ID', '')
 DISCORD_WEBHOOK = os.getenv('DISCORD_WEBHOOK', '')
+OPENCLAW_SESSION = os.getenv('OPENCLAW_SESSION', 'main')
 
 FLEX_BASE_URL = "https://ndcdyn.interactivebrokers.com/AccountManagement/FlexWebService"
 
@@ -152,6 +153,42 @@ def send_discord(message):
         print(f"Failed: {resp.status_code}")
 
 
+def trigger_openclaw(positions):
+    """Trigger OpenClaw agent to research positions"""
+    if not positions:
+        return
+    
+    # Get top 5 tickers by value
+    top_tickers = sorted(positions, key=lambda x: x.get('position_value', 0), reverse=True)[:5]
+    tickers = [p['symbol'] for p in top_tickers]
+    
+    # Send to OpenClaw session
+    gateway_url = os.getenv('OPENCLAW_GATEWAY_URL', 'http://127.0.0.1:18789')
+    gateway_token = os.getenv('OPENCLAW_GATEWAY_TOKEN', '')
+    
+    if not gateway_token:
+        print("No OpenClaw gateway token configured")
+        return
+    
+    # Format tickers for research request
+    ticker_list = ", ".join(tickers)
+    research_request = f"Research these stocks for latest news: {ticker_list}. Post findings to #portfolio."
+    
+    try:
+        resp = requests.post(
+            f"{gateway_url}/api/sessions/{OPENCLAW_SESSION}/messages",
+            headers={"Authorization": f"Bearer {gateway_token}"},
+            json={"content": research_request},
+            timeout=10
+        )
+        if resp.status_code in [200, 201, 202]:
+            print(f"Triggered OpenClaw agent for: {ticker_list}")
+        else:
+            print(f"OpenClaw trigger failed: {resp.status_code}")
+    except Exception as e:
+        print(f"OpenClaw trigger error: {e}")
+
+
 def main():
     print("IBKR Daily Positions")
     print("=" * 40)
@@ -169,6 +206,9 @@ def main():
         return
     
     print(f"Found {len(positions)} positions")
+    
+    # Trigger OpenClaw research
+    trigger_openclaw(positions)
     
     message = format_message(positions)
     send_discord(message)
