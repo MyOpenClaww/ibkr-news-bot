@@ -49,10 +49,10 @@ def get_positions():
     response_text = response.text
     
     # Check if it's a query response with reference code
-    if '<referenceCode>' in response_text:
+    if '<ReferenceCode>' in response_text:
         import xml.etree.ElementTree as ET
         root = ET.fromstring(response_text)
-        ref_code_elem = root.find('.//referenceCode')
+        ref_code_elem = root.find('.//ReferenceCode')
         
         if ref_code_elem is None or not ref_code_elem.text:
             print(f"Could not find reference code in response")
@@ -61,6 +61,7 @@ def get_positions():
         reference_code = ref_code_elem.text
         
         # Step 2: Fetch the report using reference code
+        # Use the URL from the response or default
         statement_url = f"{FLEX_BASE_URL}/GetStatement"
         params = {
             't': IBKR_FLEX_TOKEN,
